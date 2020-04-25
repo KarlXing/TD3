@@ -4,7 +4,8 @@ import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.functional as F
 import utils
-
+from torch.utils.tensorboard import SummaryWriter
+import torch.nn.functional as F
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Implementation of Twin Delayed Deep Deterministic Policy Gradients (TD3)
@@ -67,7 +68,7 @@ class Critic(nn.Module):
 
 
 class TD3(object):
-	def __init__(self, state_dim, action_dim, max_action):
+	def __init__(self, state_dim, action_dim, max_action, writer=None):
 		self.actor = Actor(state_dim, action_dim, max_action).to(device)
 		self.actor_target = Actor(state_dim, action_dim, max_action).to(device)
 		self.actor_target.load_state_dict(self.actor.state_dict())
@@ -79,6 +80,13 @@ class TD3(object):
 		self.critic_optimizer = torch.optim.Adam(self.critic.parameters())
 
 		self.max_action = max_action
+		if writer is None:
+			self.writer = SummaryWriter()
+		else:
+			self.writer = writer
+		self.count = 0
+		self.running_sim = 0
+		self.policy_update_count = 0
 
 
 	def select_action(self, state):
@@ -86,7 +94,7 @@ class TD3(object):
 		return self.actor(state).cpu().data.numpy().flatten()
 
 
-	def train(self, replay_buffer, iterations, batch_size=100, discount=0.99, tau=0.005, policy_noise=0.2, noise_clip=0.5, policy_freq=2):
+	def train(self, replay_buffer, iterations, batch_size=100, discount=0.99, tau=0.005, policy_noise=0.2, noise_clip=0.5, policy_freq=2, use_sim=False):
 
 		for it in range(iterations):
 
@@ -108,6 +116,17 @@ class TD3(object):
 			target_Q = torch.min(target_Q1, target_Q2)
 			target_Q = reward + (done * discount * target_Q).detach()
 
+			# Compute Q1 and Q2 similarity
+			sim_Q1, sim_Q2 = target_Q1.detach().squeeze(), target_Q2.detach().squeeze()
+			sim_Q1_mean, sim_Q1_std = torch.mean(sim_Q1), torch.std(sim_Q1)
+			sim_Q2_mean, sim_Q2_std = torch.mean(sim_Q2), torch.std(sim_Q2)
+			sim_Q1 = (sim_Q1 - sim_Q1_mean)/sim_Q1_std
+			sim_Q2 = (sim_Q2 - sim_Q2_mean)/sim_Q2_std
+			sim = F.cosine_similarity(sim_Q1, sim_Q2, dim=0)
+			self.writer.add_scalar("Similarity", sim.item(), self.count)
+			self.count += 1
+			self.running_sim = self.running_sim * 0.99 + sim.item() * 0.01
+
 			# Get current Q estimates
 			current_Q1, current_Q2 = self.critic(state, action)
 
@@ -120,9 +139,14 @@ class TD3(object):
 			self.critic_optimizer.step()
 
 			# Delayed policy updates
-			if it % policy_freq == 0:
-
+			if use_sim:
+				update_policy = (sim > self.running_sim)
+			else:
+				update_policy = (it % policy_freq == 0)
+			
+			if update_policy:
 				# Compute actor loss
+				self.policy_update_count += 1
 				actor_loss = -self.critic.Q1(state, self.actor(state)).mean()
 				
 				# Optimize the actor 
@@ -136,6 +160,8 @@ class TD3(object):
 
 				for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
 					target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
+
+			self.writer.add_scalar("Update Freq", self.policy_update_count / self.count, self.count)
 
 
 	def save(self, filename, directory):
