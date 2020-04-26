@@ -157,5 +157,5 @@ if __name__ == "__main__":
 	writer.add_scalar('Evaluate Score', score, eva_count)
 	eva_count += 1
 	writer.close()
-	if args.save_models: policy.save("%s" % (file_name), directory="./pytorch_models")
+	if args.save_models: policy.save("%s" % (time_now + file_name), directory="./pytorch_models")
 	np.save("./results/%s" % (time_now + file_name), evaluations)  

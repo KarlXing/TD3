@@ -85,7 +85,7 @@ class TD3(object):
 		else:
 			self.writer = writer
 		self.count = 0
-		self.running_sim = 0
+		self.running_sim = 1
 		self.policy_update_count = 0
 
 
