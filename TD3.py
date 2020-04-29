@@ -117,15 +117,15 @@ class TD3(object):
 			target_Q = reward + (done * discount * target_Q).detach()
 
 			# Compute Q1 and Q2 similarity
-			sim_Q1, sim_Q2 = target_Q1.detach().squeeze(), target_Q2.detach().squeeze()
-			sim_Q1_mean, sim_Q1_std = torch.mean(sim_Q1), torch.std(sim_Q1)
-			sim_Q2_mean, sim_Q2_std = torch.mean(sim_Q2), torch.std(sim_Q2)
-			sim_Q1 = (sim_Q1 - sim_Q1_mean)/sim_Q1_std
-			sim_Q2 = (sim_Q2 - sim_Q2_mean)/sim_Q2_std
-			sim = F.cosine_similarity(sim_Q1, sim_Q2, dim=0)
-			self.writer.add_scalar("Similarity", sim.item(), self.count)
-			self.count += 1
-			self.running_sim = self.running_sim * 0.99 + sim.item() * 0.01
+			if use_sim:
+				sim_Q1, sim_Q2 = target_Q1.detach().squeeze(), target_Q2.detach().squeeze()
+				max_Q, _ = torch.max(torch.stack([sim_Q1, sim_Q2]), dim=0)
+				min_Q, _ = torch.min(torch.stack([sim_Q1, sim_Q2]), dim=0)
+				max_Q, min_Q = torch.clamp(max_Q, min=1e-10), torch.clamp(min_Q, min=1e-10)
+				diff_ratio = (max_Q - min_Q)/min_Q
+				sorted_diff, sorted_index = torch.sort(diff_ratio, dim=0)
+				sorted_index = sorted_index.squeeze()
+				selected_index = sorted_index[:int(batch_size/2)]
 
 			# Get current Q estimates
 			current_Q1, current_Q2 = self.critic(state, action)
@@ -140,7 +140,8 @@ class TD3(object):
 
 			# Delayed policy updates
 			if use_sim:
-				update_policy = (sim > self.running_sim)
+				state = state[selected_index]
+				update_policy = True
 			else:
 				update_policy = (it % policy_freq == 0)
 			
@@ -160,8 +161,6 @@ class TD3(object):
 
 				for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
 					target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
-
-			self.writer.add_scalar("Update Freq", self.policy_update_count / self.count, self.count)
 
 
 	def save(self, filename, directory):
