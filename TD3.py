@@ -123,9 +123,13 @@ class TD3(object):
 				min_Q, _ = torch.min(torch.stack([sim_Q1, sim_Q2]), dim=0)
 				max_Q, min_Q = torch.clamp(max_Q, min=1e-10), torch.clamp(min_Q, min=1e-10)
 				diff_ratio = (max_Q - min_Q)/min_Q
-				sorted_diff, sorted_index = torch.sort(diff_ratio, dim=0)
-				sorted_index = sorted_index.squeeze()
-				selected_index = sorted_index[:int(batch_size/2)]
+				uncertainty = (F.softmax(diff_ratio, dim=0)*batch_size)
+				certainty = torch.clamp(1/uncertainty, min=0, max=1)
+				# if it == 0:
+				# 	print("min_Q", min_Q)
+				# 	print("max_Q", max_Q)
+				# 	print(uncertainty)
+				# 	print(certainty)
 
 			# Get current Q estimates
 			current_Q1, current_Q2 = self.critic(state, action)
@@ -140,15 +144,18 @@ class TD3(object):
 
 			# Delayed policy updates
 			if use_sim:
-				state = state[selected_index]
 				update_policy = True
 			else:
 				update_policy = (it % policy_freq == 0)
-			
+				certainty = None
+		
 			if update_policy:
 				# Compute actor loss
 				self.policy_update_count += 1
-				actor_loss = -self.critic.Q1(state, self.actor(state)).mean()
+				if certainty is None:
+					actor_loss = -self.critic.Q1(state, self.actor(state)).mean()
+				else:
+					actor_loss = (-self.critic.Q1(state, self.actor(state)).squeeze() * certainty).mean()
 				
 				# Optimize the actor 
 				self.actor_optimizer.zero_grad()
